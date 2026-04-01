@@ -24,9 +24,22 @@ SERVER_ADDRESS = os.getenv("SERVER_ADDRESS", "127.0.0.1")
 CLIENT_ID = str(uuid.uuid4())
 DEFAULT_OUTPUT_MODE = os.getenv("DEFAULT_OUTPUT_MODE", "auto")
 
-COMFY_MODEL_DIR = Path("/ComfyUI/models/diffusion_models")
-RUNPOD_VOLUME_MODEL_DIR = Path("/runpod-volume/models")
-MODEL_ROOT = Path(os.getenv("MODEL_ROOT", str(RUNPOD_VOLUME_MODEL_DIR if RUNPOD_VOLUME_MODEL_DIR.exists() else COMFY_MODEL_DIR)))
+COMFY_MODEL_BASE = Path("/ComfyUI/models")
+COMFY_LORA_DIR = COMFY_MODEL_BASE / "loras"
+RUNPOD_VOLUME_BASE = Path("/runpod-volume/models")
+RUNPOD_VOLUME_LORA_DIR = Path("/runpod-volume/loras")
+MODEL_BASE_ROOT = Path(
+    os.getenv(
+        "MODEL_BASE_ROOT",
+        str(RUNPOD_VOLUME_BASE if RUNPOD_VOLUME_BASE.exists() else COMFY_MODEL_BASE),
+    )
+)
+LORA_ROOT = Path(
+    os.getenv(
+        "LORA_ROOT",
+        str(RUNPOD_VOLUME_LORA_DIR if RUNPOD_VOLUME_LORA_DIR.exists() else COMFY_LORA_DIR),
+    )
+)
 DEFAULT_MODEL_PROFILE = os.getenv("DEFAULT_MODEL_PROFILE", "fp8_e4m3fn")
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -45,10 +58,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors",
             },
             "low": {
                 "filename": "Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors",
             },
         },
@@ -60,10 +75,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "Wan2_2-I2V-A14B-HIGH_fp8_e5m2_scaled_KJ.safetensors",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-HIGH_fp8_e5m2_scaled_KJ.safetensors",
             },
             "low": {
                 "filename": "Wan2_2-I2V-A14B-LOW_fp8_e5m2_scaled_KJ.safetensors",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-LOW_fp8_e5m2_scaled_KJ.safetensors",
             },
         },
@@ -75,10 +92,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q2_K.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q2_K.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q2_K.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q2_K.gguf",
             },
         },
@@ -90,10 +109,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q3_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q3_K_M.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q3_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q3_K_M.gguf",
             },
         },
@@ -105,10 +126,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q4_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q4_K_M.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q4_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q4_K_M.gguf",
             },
         },
@@ -120,10 +143,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q5_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q5_K_M.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q5_K_M.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q5_K_M.gguf",
             },
         },
@@ -135,10 +160,12 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q6_K.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q6_K.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q6_K.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q6_K.gguf",
             },
         },
@@ -150,13 +177,44 @@ MODEL_PROFILES: Dict[str, Dict[str, Any]] = {
         "files": {
             "high": {
                 "filename": "wan2.2_i2v_high_noise_14B_Q8_0.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_high_noise_14B_Q8_0.gguf",
             },
             "low": {
                 "filename": "wan2.2_i2v_low_noise_14B_Q8_0.gguf",
+                "subdir": "diffusion_models",
                 "url": "https://huggingface.co/bullerwins/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2_i2v_low_noise_14B_Q8_0.gguf",
             },
         },
+    },
+}
+
+SUPPORT_ASSETS: Dict[str, Dict[str, str]] = {
+    "clip_vision": {
+        "filename": "clip_vision_h.safetensors",
+        "subdir": "clip_vision",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+    },
+    "text_encoder": {
+        "filename": "umt5-xxl-enc-bf16.safetensors",
+        "subdir": "text_encoders",
+        "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors",
+    },
+    "vae": {
+        "filename": "Wan2_1_VAE_bf16.safetensors",
+        "subdir": "vae",
+        "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
+    },
+}
+
+DEFAULT_LORA_ASSETS: Dict[str, Dict[str, str]] = {
+    "high_noise_model.safetensors": {
+        "filename": "high_noise_model.safetensors",
+        "url": "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors",
+    },
+    "low_noise_model.safetensors": {
+        "filename": "low_noise_model.safetensors",
+        "url": "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors",
     },
 }
 
@@ -214,6 +272,37 @@ def download_to_path(url: str, output_path: Path, timeout: int = 600) -> Path:
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+
+def resolve_model_target(subdir: str, filename: str) -> Path:
+    return MODEL_BASE_ROOT / subdir / filename
+
+
+def resolve_lora_target(filename: str) -> Path:
+    return LORA_ROOT / filename
+
+
+def ensure_asset_available(asset: Dict[str, str], target_path: Path, progress_message: Optional[str] = None) -> str:
+    ensure_directory(target_path.parent)
+    if not target_path.exists():
+        if progress_message:
+            logger.info(progress_message)
+        download_to_path(asset["url"], target_path)
+    return target_path.name
+
+
+def ensure_support_assets(job: Dict[str, Any]) -> None:
+    progress(job, "Ensuring shared Wan support assets are available")
+    for asset_name, asset in SUPPORT_ASSETS.items():
+        target_path = resolve_model_target(asset["subdir"], asset["filename"])
+        ensure_asset_available(asset, target_path, f"Downloading support asset '{asset_name}'")
+
+
+def ensure_default_loras(job: Dict[str, Any]) -> None:
+    progress(job, "Ensuring default lightning LoRAs are available")
+    for lora_name, asset in DEFAULT_LORA_ASSETS.items():
+        target_path = resolve_lora_target(asset["filename"])
+        ensure_asset_available(asset, target_path, f"Downloading default LoRA '{lora_name}'")
 
 
 def process_input(input_data: str, temp_dir: str, output_filename: str, input_type: str) -> str:
@@ -360,13 +449,14 @@ def choose_model_profile(job_input: Dict[str, Any]) -> Tuple[str, Dict[str, Any]
 
 def ensure_model_profile_available(profile_key: str, profile: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, str]:
     progress(job, f"Ensuring model profile '{profile_key}' is available")
-    ensure_directory(MODEL_ROOT)
     resolved_files = {}
     for expert_name, file_info in profile["files"].items():
-        target_path = MODEL_ROOT / file_info["filename"]
-        if not target_path.exists():
-            progress(job, f"Downloading {expert_name} expert for '{profile_key}'")
-            download_to_path(file_info["url"], target_path)
+        target_path = resolve_model_target(file_info["subdir"], file_info["filename"])
+        ensure_asset_available(
+            file_info,
+            target_path,
+            f"Downloading {expert_name} expert for '{profile_key}'",
+        )
         resolved_files[expert_name] = target_path.name
     return resolved_files
 
@@ -471,6 +561,8 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     task_dir = f"/tmp/task_{uuid.uuid4()}"
     image_path, end_image_path = get_image_inputs(job_input, task_dir)
 
+    ensure_support_assets(job)
+    ensure_default_loras(job)
     profile_key, profile, selection_reason = choose_model_profile(job_input)
     resolved_files = ensure_model_profile_available(profile_key, profile, job)
 

@@ -9,7 +9,7 @@ This repository contains a `runpod.io` Serverless worker and a Python client for
 - Added GGUF quantized Wan 2.2 support
 - Added automatic selection from `gpu_profile` or `target_vram_gb`
 - Added RunPod-friendly output modes: `base64` or `bucket_url`
-- Added lazy model download into `/runpod-volume/models`
+- Added lazy download for Wan 2.2 experts, support assets, and default LoRAs into `/runpod-volume`
 
 ## Main Files
 
@@ -110,6 +110,7 @@ if result.get("status") == "COMPLETED":
 5. Send the first request with an input image.
 
 The first request is the one most likely to trigger model download and cold start.
+The Docker image no longer bakes Wan weights into the image, which keeps deployment lighter and moves storage to the network volume or local worker cache.
 
 ## First Request Recommendations
 
@@ -124,12 +125,12 @@ Example prompt:
 
 ## LoRA Usage
 
-Built-in defaults:
+Default workflow LoRAs:
 
 - `high_noise_model.safetensors`
 - `low_noise_model.safetensors`
 
-These are already present in the image and used as the workflow defaults.
+These are fetched lazily on first use and then reused from the volume or worker-local model directory.
 
 Custom LoRAs:
 
@@ -180,6 +181,7 @@ Then open `http://127.0.0.1:8787`.
 - Physical GPU choice is configured on the RunPod endpoint, not inside the handler.
 - `gpu_profile` is an optimization target for model selection, not infrastructure provisioning.
 - Use `/runpod-volume/models` and `/runpod-volume/loras` for better cold-start behavior.
+- The current Docker image is intentionally thinner: ComfyUI + custom nodes are baked in, while heavy Wan assets are downloaded only when needed.
 - Prefer `output_mode="bucket_url"` when bucket credentials are configured.
 
 ## References

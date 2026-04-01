@@ -11,6 +11,7 @@ The worker supports:
 - VRAM-driven automatic profile selection
 - GPU profile driven automatic profile selection
 - RunPod-friendly output modes (`base64` or bucket upload URL)
+- Thin Docker image strategy: ComfyUI/custom nodes in image, heavy Wan assets lazy-downloaded
 
 ## Repository Structure
 
@@ -55,7 +56,7 @@ Selection precedence:
 - Large outputs should prefer bucket upload.
   `output_mode=auto` uses `bucket_url` when RunPod bucket environment variables are present.
 - Models are resolved lazily.
-  Missing model files are downloaded on demand into `MODEL_ROOT`, defaulting to `/runpod-volume/models` when available.
+  Missing diffusion models, support assets, and default LoRAs are downloaded on demand into `/runpod-volume` when available.
 - `refresh_worker` is supported for fragmentation-sensitive or profile-switch-heavy workloads.
 
 ## Safe Change Areas

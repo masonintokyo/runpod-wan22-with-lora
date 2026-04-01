@@ -7,16 +7,24 @@ comfyui:
     is_default: true
     checkpoints: models/checkpoints/
     clip: models/clip/
-    clip_vision: models/clip_vision/
+    clip_vision: |
+        models/clip_vision/
+        /runpod-volume/models/clip_vision/
     configs: models/configs/
     controlnet: models/controlnet/
     diffusion_models: |
         models/diffusion_models
         models/unet
         /runpod-volume/models/
+        /runpod-volume/models/diffusion_models/
     embeddings: models/embeddings/
     loras: |
         models/loras/
         /runpod-volume/loras/
+    text_encoders: |
+        models/text_encoders/
+        /runpod-volume/models/text_encoders/
     upscale_models: models/upscale_models/
-    vae: models/vae/
+    vae: |
+        models/vae/
+        /runpod-volume/models/vae/

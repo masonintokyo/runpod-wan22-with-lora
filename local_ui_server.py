@@ -277,7 +277,7 @@ def render_page(values=None, result=None, error=None):
           <li>48GB+ GPU class: use <code>fp8_e4m3fn</code>.</li>
           <li>If you do not know the hardware, leave <code>model_profile</code> empty and set <code>target_vram_gb</code>.</li>
           <li>Image-to-video requires an input image.</li>
-          <li>Bundled lightning LoRAs are already in the image as <code>high_noise_model.safetensors</code> and <code>low_noise_model.safetensors</code>.</li>
+          <li>Default lightning LoRAs are fetched lazily as <code>high_noise_model.safetensors</code> and <code>low_noise_model.safetensors</code>.</li>
           <li>Custom LoRAs should be placed in <code>/runpod-volume/loras</code>.</li>
         </ul>
         <h2>LoRA Notes</h2>
