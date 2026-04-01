@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import runpod
 import websocket
@@ -43,6 +43,13 @@ LORA_ROOT = Path(
 )
 DEFAULT_MODEL_PROFILE = os.getenv("DEFAULT_MODEL_PROFILE", "fp8_e4m3fn")
 MAX_INLINE_BASE64_BYTES = int(os.getenv("MAX_INLINE_BASE64_BYTES", "9000000"))
+DEFAULT_HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")
+DEFAULT_CIVITAI_TOKEN = os.getenv("CIVITAI_API_TOKEN", "")
+CIVITAI_API_BASE = "https://civitai.com/api/v1"
+CIVITAI_DOWNLOAD_BASE = "https://civitai.com/api/download/models"
+HUGGINGFACE_BASE = "https://huggingface.co"
+HTTP_USER_AGENT = "generate-video-worker/1.0"
+SENSITIVE_INPUT_KEYS = {"image_base64", "end_image_base64", "civitai_token", "huggingface_token"}
 
 DEFAULT_NEGATIVE_PROMPT = (
     "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, "
@@ -260,14 +267,38 @@ def strip_data_uri_prefix(raw_base64: str) -> str:
     return raw_base64
 
 
-def download_to_path(url: str, output_path: Path, timeout: int = 600) -> Path:
+def sanitize_for_log(value: Any, key: Optional[str] = None) -> Any:
+    if key in SENSITIVE_INPUT_KEYS:
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {k: sanitize_for_log(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_for_log(item) for item in value]
+    if isinstance(value, str) and len(value) > 240:
+        return f"<omitted len={len(value)}>"
+    return value
+
+
+def make_request(url: str, headers: Optional[Dict[str, str]] = None, method: Optional[str] = None) -> urllib.request.Request:
+    final_headers = {"User-Agent": HTTP_USER_AGENT}
+    if headers:
+        final_headers.update(headers)
+    return urllib.request.Request(url, headers=final_headers, method=method)
+
+
+def fetch_json(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Dict[str, Any]:
+    with urllib.request.urlopen(make_request(url, headers=headers), timeout=timeout) as response:
+        return json.load(response)
+
+
+def download_to_path(url: str, output_path: Path, timeout: int = 600, headers: Optional[Dict[str, str]] = None) -> Path:
     ensure_directory(output_path.parent)
     tmp_fd, tmp_name = tempfile.mkstemp(prefix=f"{output_path.name}.", dir=str(output_path.parent))
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:
         logger.info("Downloading %s -> %s", url, output_path)
-        with urllib.request.urlopen(url, timeout=timeout) as response, open(tmp_path, "wb") as handle:
+        with urllib.request.urlopen(make_request(url, headers=headers), timeout=timeout) as response, open(tmp_path, "wb") as handle:
             shutil.copyfileobj(response, handle)
         tmp_path.replace(output_path)
         return output_path
@@ -292,7 +323,62 @@ def candidate_lora_targets(filename: str) -> Tuple[Path, ...]:
     return tuple(candidates)
 
 
-def ensure_asset_available(asset: Dict[str, str], target_paths: Tuple[Path, ...], progress_message: Optional[str] = None) -> str:
+def sanitize_filename(filename: str) -> str:
+    cleaned = os.path.basename((filename or "").strip())
+    if not cleaned or cleaned in {".", ".."}:
+        raise ValueError(f"Invalid filename: {filename!r}")
+    return cleaned
+
+
+def infer_filename_from_url(url: str, fallback_name: str) -> str:
+    path = urllib.parse.urlparse(url).path
+    candidate = os.path.basename(path)
+    if candidate and "." in candidate:
+        return sanitize_filename(candidate)
+    return sanitize_filename(fallback_name)
+
+
+def get_request_token(job_input: Dict[str, Any], field_name: str, env_value: str) -> Optional[str]:
+    token = str(job_input.get(field_name) or env_value or "").strip()
+    return token or None
+
+
+def make_bearer_headers(token: Optional[str]) -> Dict[str, str]:
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def append_query_param(url: str, key: str, value: Optional[str]) -> str:
+    if not value:
+        return url
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query[key] = [value]
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
+
+
+def extract_filename_from_content_disposition(header_value: Optional[str]) -> Optional[str]:
+    if not header_value:
+        return None
+    parts = [part.strip() for part in header_value.split(";")]
+    for part in parts:
+        if part.lower().startswith("filename="):
+            value = part.split("=", 1)[1].strip().strip('"')
+            if value:
+                return sanitize_filename(value)
+    return None
+
+
+def head_filename(url: str, headers: Optional[Dict[str, str]] = None) -> Optional[str]:
+    try:
+        with urllib.request.urlopen(make_request(url, headers=headers, method="HEAD"), timeout=30) as response:
+            return extract_filename_from_content_disposition(response.headers.get("content-disposition"))
+    except Exception:
+        return None
+
+
+def ensure_asset_available(asset: Dict[str, Any], target_paths: Tuple[Path, ...], progress_message: Optional[str] = None) -> str:
     for target_path in target_paths:
         if target_path.exists():
             return target_path.name
@@ -304,7 +390,7 @@ def ensure_asset_available(asset: Dict[str, str], target_paths: Tuple[Path, ...]
     for index, target_path in enumerate(target_paths):
         try:
             ensure_directory(target_path.parent)
-            download_to_path(asset["url"], target_path)
+            download_to_path(asset["url"], target_path, headers=asset.get("headers"))
             return target_path.name
         except OSError as exc:
             last_error = exc
@@ -336,6 +422,283 @@ def ensure_default_loras(job: Dict[str, Any]) -> None:
     for lora_name, asset in DEFAULT_LORA_ASSETS.items():
         target_paths = candidate_lora_targets(asset["filename"])
         ensure_asset_available(asset, target_paths, f"Downloading default LoRA '{lora_name}'")
+
+
+def resolve_existing_lora(filename: str) -> str:
+    resolved_name = sanitize_filename(filename)
+    for target_path in candidate_lora_targets(resolved_name):
+        if target_path.exists():
+            return resolved_name
+    raise FileNotFoundError(
+        f"LoRA file '{resolved_name}' was not found. Place it under '{LORA_ROOT}' "
+        "or provide a Civitai/Hugging Face/direct download reference in `loras`."
+    )
+
+
+def ensure_custom_lora(url: str, filename_hint: Optional[str], index: int, headers: Optional[Dict[str, str]] = None) -> str:
+    filename = sanitize_filename(filename_hint) if filename_hint else infer_filename_from_url(url, f"custom_lora_{index + 1}.safetensors")
+    target_paths = candidate_lora_targets(filename)
+    asset = {"filename": filename, "url": url, "headers": headers or {}}
+    ensure_asset_available(asset, target_paths, f"Downloading custom LoRA '{filename}'")
+    return filename
+
+
+def build_huggingface_resolve_url(repo: str, path: str, revision: str = "main") -> str:
+    repo = repo.strip("/")
+    path = path.strip("/")
+    revision = revision.strip("/") or "main"
+    if not repo or not path:
+        raise ValueError("Hugging Face LoRA references require both `repo` and `path`.")
+    return f"{HUGGINGFACE_BASE}/{repo}/resolve/{revision}/{path}"
+
+
+def parse_huggingface_url(url: str) -> Tuple[str, str, str]:
+    parsed = urllib.parse.urlparse(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 5 or parts[2] not in {"resolve", "blob"}:
+        raise ValueError(
+            "Unsupported Hugging Face URL. Use a file URL like "
+            "`https://huggingface.co/<repo>/resolve/<revision>/<path>` or `/blob/...`."
+        )
+    repo = "/".join(parts[:2])
+    revision = parts[3]
+    path = "/".join(parts[4:])
+    return repo, revision, path
+
+
+def resolve_huggingface_reference(entry: Dict[str, Any], source: str, index: int, token: Optional[str]) -> Dict[str, Any]:
+    if source:
+        repo, revision, path = parse_huggingface_url(source)
+    else:
+        repo = str(entry.get("repo", "")).strip()
+        revision = str(entry.get("revision", "main")).strip() or "main"
+        path = str(entry.get("path", "")).strip()
+    url = build_huggingface_resolve_url(repo, path, revision)
+    filename_hint = str(entry.get("filename") or entry.get("name") or "").strip() or os.path.basename(path)
+    return {
+        "provider": "huggingface",
+        "download_url": url,
+        "filename": sanitize_filename(filename_hint),
+        "headers": make_bearer_headers(token),
+        "details": {"repo": repo, "revision": revision, "path": path},
+    }
+
+
+def choose_civitai_file(model_data: Dict[str, Any], version_id: Optional[int]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    versions = model_data.get("modelVersions") or []
+    if not versions:
+        raise ValueError(f"Civitai model {model_data.get('id')} has no downloadable versions.")
+    chosen_version = None
+    if version_id is not None:
+        for version in versions:
+            if int(version.get("id")) == int(version_id):
+                chosen_version = version
+                break
+        if chosen_version is None:
+            raise ValueError(f"Civitai model {model_data.get('id')} does not contain version {version_id}.")
+    else:
+        chosen_version = versions[0]
+    files = chosen_version.get("files") or []
+    if not files:
+        raise ValueError(f"Civitai model version {chosen_version.get('id')} has no downloadable files.")
+    safetensor_files = [file_info for file_info in files if str(file_info.get("name", "")).lower().endswith(".safetensors")]
+    return chosen_version, safetensor_files[0] if safetensor_files else files[0]
+
+
+def resolve_civitai_reference(entry: Dict[str, Any], source: str, index: int, token: Optional[str]) -> Dict[str, Any]:
+    parsed = urllib.parse.urlparse(source) if source else None
+    model_id = entry.get("model_id") or entry.get("modelId")
+    version_id = entry.get("model_version_id") or entry.get("modelVersionId")
+
+    if parsed and parsed.netloc.endswith("civitai.com"):
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 4 and parts[0] == "api" and parts[1] == "download" and parts[2] == "models":
+            version_id = version_id or parts[3]
+        elif len(parts) >= 2 and parts[0] == "models":
+            model_id = model_id or parts[1]
+            query = urllib.parse.parse_qs(parsed.query)
+            version_id = version_id or (query.get("modelVersionId", [None])[0])
+
+    if model_id:
+        model_url = f"{CIVITAI_API_BASE}/models/{int(model_id)}"
+        model_data = fetch_json(model_url, headers=make_bearer_headers(token))
+        chosen_version, file_info = choose_civitai_file(model_data, int(version_id) if version_id else None)
+        download_url = file_info["downloadUrl"]
+        filename = sanitize_filename(file_info["name"])
+        resolved_version_id = int(chosen_version["id"])
+        resolved_model_id = int(model_data["id"])
+    elif version_id:
+        resolved_version_id = int(version_id)
+        download_url = f"{CIVITAI_DOWNLOAD_BASE}/{resolved_version_id}"
+        filename = (
+            str(entry.get("filename") or entry.get("name") or "").strip()
+            or head_filename(append_query_param(download_url, "token", token), headers=make_bearer_headers(token))
+            or f"civitai_lora_{resolved_version_id}.safetensors"
+        )
+        filename = sanitize_filename(filename)
+        resolved_model_id = None
+    else:
+        raise ValueError(
+            "Unsupported Civitai reference. Use a model page URL with `modelVersionId`, "
+            "a download URL, or structured `modelId`/`modelVersionId`."
+        )
+
+    download_url = append_query_param(download_url, "token", token)
+    return {
+        "provider": "civitai",
+        "download_url": download_url,
+        "filename": filename,
+        "headers": make_bearer_headers(token),
+        "details": {"model_id": resolved_model_id, "model_version_id": resolved_version_id},
+    }
+
+
+def resolve_lora_source(entry: Dict[str, Any], source: str, index: int, job_input: Dict[str, Any]) -> Dict[str, Any]:
+    source = source.strip()
+    if not source:
+        raise ValueError("LoRA source cannot be empty.")
+
+    if source.startswith("http://") or source.startswith("https://"):
+        parsed = urllib.parse.urlparse(source)
+        host = parsed.netloc.lower()
+        if host.endswith("huggingface.co"):
+            token = str(entry.get("huggingface_token") or entry.get("token") or get_request_token(job_input, "huggingface_token", DEFAULT_HUGGINGFACE_TOKEN) or "").strip() or None
+            return resolve_huggingface_reference(entry, source, index, token)
+        if host.endswith("civitai.com"):
+            token = str(entry.get("civitai_token") or entry.get("token") or get_request_token(job_input, "civitai_token", DEFAULT_CIVITAI_TOKEN) or "").strip() or None
+            return resolve_civitai_reference(entry, source, index, token)
+        filename = str(entry.get("filename") or entry.get("name") or "").strip()
+        if not filename:
+            filename = head_filename(source) or infer_filename_from_url(source, f"custom_lora_{index + 1}.safetensors")
+        return {
+            "provider": "direct_url",
+            "download_url": source,
+            "filename": sanitize_filename(filename),
+            "headers": entry.get("headers") or {},
+            "details": {"url": source},
+        }
+
+    return {
+        "provider": "existing_file",
+        "download_url": "",
+        "filename": resolve_existing_lora(source),
+        "headers": {},
+        "details": {"filename": sanitize_filename(source)},
+    }
+
+
+def normalize_single_lora(entry: Any, index: int, job_input: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if isinstance(entry, str):
+        entry_dict: Dict[str, Any] = {"source": entry}
+    elif isinstance(entry, dict):
+        entry_dict = dict(entry)
+    else:
+        raise ValueError("Each `loras` entry must be a string or object.")
+
+    weight = float(entry_dict.get("weight", 1.0))
+    source = str(entry_dict.get("source") or "").strip()
+    filename_only = str(entry_dict.get("filename") or entry_dict.get("name") or "").strip()
+
+    if source:
+        resolved = resolve_lora_source(entry_dict, source, index, job_input)
+    elif entry_dict.get("url"):
+        entry_dict["source"] = str(entry_dict["url"]).strip()
+        resolved = resolve_lora_source(entry_dict, entry_dict["source"], index, job_input)
+    elif entry_dict.get("repo") and entry_dict.get("path"):
+        token = str(entry_dict.get("huggingface_token") or entry_dict.get("token") or get_request_token(job_input, "huggingface_token", DEFAULT_HUGGINGFACE_TOKEN) or "").strip() or None
+        resolved = resolve_huggingface_reference(entry_dict, "", index, token)
+    elif any(entry_dict.get(key) for key in ("modelId", "model_id", "modelVersionId", "model_version_id")):
+        token = str(entry_dict.get("civitai_token") or entry_dict.get("token") or get_request_token(job_input, "civitai_token", DEFAULT_CIVITAI_TOKEN) or "").strip() or None
+        resolved = resolve_civitai_reference(entry_dict, "", index, token)
+    elif filename_only:
+        resolved = resolve_lora_source(entry_dict, filename_only, index, job_input)
+    else:
+        raise ValueError("Each `loras` entry must include `source`, `url`, `filename`, or provider-specific fields.")
+
+    resolved_filename = (
+        resolved["filename"]
+        if not resolved["download_url"]
+        else ensure_custom_lora(resolved["download_url"], resolved["filename"], index, headers=resolved["headers"])
+    )
+    return (
+        {
+            "high": resolved_filename,
+            "low": resolved_filename,
+            "high_weight": weight,
+            "low_weight": weight,
+        },
+        {
+            "provider": resolved["provider"],
+            "input": source or filename_only or resolved["download_url"],
+            "resolved_filename": resolved_filename,
+            "weight": weight,
+            **resolved["details"],
+        },
+    )
+
+
+def normalize_legacy_branch(source: str, weight: float, index: int, job_input: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]], float]:
+    source = str(source or "").strip()
+    if not source:
+        return None, None, weight
+    resolved = resolve_lora_source({}, source, index, job_input)
+    filename = resolved["filename"] if not resolved["download_url"] else ensure_custom_lora(
+        resolved["download_url"], resolved["filename"], index, headers=resolved["headers"]
+    )
+    return filename, {
+        "provider": resolved["provider"],
+        "input": source,
+        "resolved_filename": filename,
+        "weight": weight,
+        **resolved["details"],
+    }, weight
+
+
+def normalize_lora_pairs(job_input: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    normalized: List[Dict[str, Any]] = []
+    resolved_metadata: List[Dict[str, Any]] = []
+
+    generic_loras = job_input.get("loras", [])
+    if generic_loras:
+        if not isinstance(generic_loras, list):
+            raise ValueError("`loras` must be a list.")
+        for index, lora in enumerate(generic_loras):
+            pair, metadata = normalize_single_lora(lora, index, job_input)
+            normalized.append(pair)
+            resolved_metadata.append(metadata)
+
+    legacy_lora_pairs = job_input.get("lora_pairs", [])
+    if legacy_lora_pairs:
+        if not isinstance(legacy_lora_pairs, list):
+            raise ValueError("`lora_pairs` must be a list of objects.")
+        for index, lora_pair in enumerate(legacy_lora_pairs, start=len(normalized)):
+            if not isinstance(lora_pair, dict):
+                raise ValueError("Each `lora_pairs` entry must be an object.")
+
+            high_source = str(lora_pair.get("high_url") or lora_pair.get("high_source") or lora_pair.get("high") or "").strip()
+            low_source = str(lora_pair.get("low_url") or lora_pair.get("low_source") or lora_pair.get("low") or "").strip()
+            high_weight = float(lora_pair.get("high_weight", 1.0))
+            low_weight = float(lora_pair.get("low_weight", 1.0))
+
+            high, high_meta, _ = normalize_legacy_branch(high_source, high_weight, index, job_input)
+            low, low_meta, _ = normalize_legacy_branch(low_source, low_weight, index, job_input)
+
+            if not high and not low:
+                raise ValueError("Each `lora_pairs` entry must include at least one LoRA source.")
+
+            normalized.append({
+                "high": high,
+                "low": low,
+                "high_weight": high_weight,
+                "low_weight": low_weight,
+            })
+            resolved_metadata.append({
+                "provider": "legacy_pair",
+                "high": high_meta,
+                "low": low_meta,
+            })
+
+    return normalized, resolved_metadata
 
 
 def process_input(input_data: str, temp_dir: str, output_filename: str, input_type: str) -> str:
@@ -441,6 +804,7 @@ def choose_model_profile(job_input: Dict[str, Any]) -> Tuple[str, Dict[str, Any]
 
     gpu_profile = job_input.get("gpu_profile")
     if gpu_profile:
+        logger.warning("`gpu_profile` is deprecated as a request field. Prefer `model_profile` or endpoint defaults.")
         if gpu_profile not in GPU_PROFILES:
             raise ValueError(
                 f"Unsupported gpu_profile '{gpu_profile}'. "
@@ -569,13 +933,22 @@ def ensure_inline_output_size(video_path: str) -> None:
         )
 
 
-def build_output(video_path: str, job: Dict[str, Any], job_input: Dict[str, Any], profile_key: str, selection_reason: str) -> Dict[str, Any]:
+def build_output(
+    video_path: str,
+    job: Dict[str, Any],
+    job_input: Dict[str, Any],
+    profile_key: str,
+    selection_reason: str,
+    resolved_loras: List[Dict[str, Any]],
+) -> Dict[str, Any]:
     output_mode = resolve_output_mode(job, job_input)
     payload: Dict[str, Any] = {
         "model_profile": profile_key,
         "model_selection_reason": selection_reason,
         "output_mode": output_mode,
     }
+    if resolved_loras:
+        payload["resolved_loras"] = resolved_loras
 
     if output_mode == "bucket_url":
         progress(job, "Uploading generated video to object storage")
@@ -626,7 +999,7 @@ def get_image_inputs(job_input: Dict[str, Any], task_dir: str) -> Tuple[str, Opt
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     job_input = job.get("input", {})
-    logger.info("Received job input: %s", json.dumps(job_input, ensure_ascii=False))
+    logger.info("Received job input: %s", json.dumps(sanitize_for_log(job_input), ensure_ascii=False))
 
     if job_input.get("describe_capabilities", False):
         return {
@@ -634,6 +1007,30 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             "available_gpu_profiles": GPU_PROFILES,
             "default_model_profile": DEFAULT_MODEL_PROFILE,
             "default_output_mode": DEFAULT_OUTPUT_MODE,
+            "deprecated_request_fields": ["gpu_profile"],
+            "supported_lora_fields": {
+                "loras": {
+                    "description": "preferred; each entry may be a string or object",
+                    "accepted_forms": [
+                        "existing filename under /runpod-volume/loras",
+                        "direct URL to a .safetensors file",
+                        "Civitai model page URL with modelVersionId",
+                        "Civitai download URL",
+                        "Hugging Face /resolve/ or /blob/ file URL",
+                        "structured Hugging Face repo/path/revision object",
+                        "structured Civitai modelId/modelVersionId object",
+                    ],
+                    "examples": [
+                        {"source": "my_style_lora.safetensors", "weight": 0.8},
+                        {"source": "https://civitai.com/models/122359/detail-tweaker-xl?modelVersionId=135867", "weight": 0.8},
+                        {"source": "https://huggingface.co/owner/repo/resolve/main/loras/my_style.safetensors", "weight": 0.8},
+                        {"provider": "huggingface", "repo": "owner/repo", "path": "loras/my_style.safetensors", "revision": "main", "weight": 0.8},
+                        {"provider": "civitai", "modelId": 122359, "modelVersionId": 135867, "weight": 0.8},
+                    ],
+                },
+                "lora_pairs": "advanced legacy form; accepts high/low filenames or URLs and optional branch-specific weights",
+            },
+            "supported_secret_fields": ["civitai_token", "huggingface_token"],
         }
 
     if "prompt" not in job_input:
@@ -648,10 +1045,11 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     profile_key, profile, selection_reason = choose_model_profile(job_input)
     resolved_files = ensure_model_profile_available(profile_key, profile, job)
 
-    lora_pairs = job_input.get("lora_pairs", [])
+    lora_pairs, resolved_loras = normalize_lora_pairs(job_input)
     if len(lora_pairs) > 4:
         logger.warning("Received %s LoRA pairs. Only the first 4 will be used.", len(lora_pairs))
         lora_pairs = lora_pairs[:4]
+        resolved_loras = resolved_loras[:4]
 
     workflow_file = "/new_Wan22_flf2v_api.json" if end_image_path else "/new_Wan22_api.json"
     prompt_payload = load_workflow(workflow_file)
@@ -698,7 +1096,7 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     progress(job, f"Running workflow with model profile '{profile_key}'")
     wait_for_comfyui()
     video_path = collect_video_path(prompt_payload)
-    payload = build_output(video_path, job, job_input, profile_key, selection_reason)
+    payload = build_output(video_path, job, job_input, profile_key, selection_reason, resolved_loras)
 
     if job_input.get("refresh_worker", False):
         return {"refresh_worker": True, "job_results": payload}

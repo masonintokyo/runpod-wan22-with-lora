@@ -16,6 +16,20 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+SENSITIVE_KEYS = {"image_base64", "end_image_base64", "civitai_token", "huggingface_token"}
+
+
+def sanitize_for_log(value: Any, key: Optional[str] = None) -> Any:
+    if key in SENSITIVE_KEYS:
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {k: sanitize_for_log(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_for_log(item) for item in value]
+    if isinstance(value, str) and len(value) > 240:
+        return f"<omitted len={len(value)}>"
+    return value
+
 class GenerateVideoClient:
     def __init__(
         self,
@@ -97,7 +111,7 @@ class GenerateVideoClient:
         
         try:
             logger.info(f"Submitting job to RunPod: {self.runpod_api_endpoint}")
-            logger.info(f"Input data: {json.dumps(input_data, indent=2, ensure_ascii=False)}")
+            logger.info("Input data: %s", json.dumps(sanitize_for_log(input_data), indent=2, ensure_ascii=False))
             
             response = self.session.post(self.runpod_api_endpoint, json=payload, timeout=30)
             response.raise_for_status()
@@ -233,10 +247,13 @@ class GenerateVideoClient:
         seed: int = 42,
         cfg: float = 2.0,
         context_overlap: int = 48,
+        loras: Optional[List[Dict[str, Any]]] = None,
         lora_pairs: Optional[List[Dict[str, Any]]] = None,
         model_profile: Optional[str] = None,
         gpu_profile: Optional[str] = None,
         target_vram_gb: Optional[int] = None,
+        civitai_token: Optional[str] = None,
+        huggingface_token: Optional[str] = None,
         output_mode: str = "auto",
         refresh_worker: bool = False
     ) -> Dict[str, Any]:
@@ -254,10 +271,13 @@ class GenerateVideoClient:
             seed: Seed value
             cfg: CFG scale
             context_overlap: Context overlap
+            loras: Preferred LoRA list. Each entry may include `filename` or direct `url`, plus `weight`
             lora_pairs: LoRA settings list (max 4)
             model_profile: Explicit Wan 2.2 model profile such as `fp8_e4m3fn` or `gguf_q4_k_m`
-            gpu_profile: Optimization target such as `L4_24GB` or `L40S_48GB`
+            gpu_profile: Deprecated optimization hint. Prefer `model_profile`
             target_vram_gb: VRAM target used for automatic model selection
+            civitai_token: Optional Civitai token for gated/private downloads
+            huggingface_token: Optional Hugging Face token for gated/private downloads
             output_mode: `auto`, `base64`, or `bucket_url`
             refresh_worker: Ask RunPod to recycle the worker after the job
         
@@ -274,14 +294,17 @@ class GenerateVideoClient:
             return {"error": "Image base64 encoding failed"}
         
         # Process LoRA settings
+        if loras is None:
+            loras = []
         if lora_pairs is None:
             lora_pairs = []
-        
-        # Support up to 4 LoRAs
-        lora_count = min(len(lora_pairs), 4)
-        if len(lora_pairs) > 4:
-            logger.warning(f"LoRA count is {len(lora_pairs)}. Only up to 4 LoRAs are supported. Using first 4 only.")
-            lora_pairs = lora_pairs[:4]
+
+        # Support up to 4 LoRAs across both syntaxes
+        if len(loras) + len(lora_pairs) > 4:
+            logger.warning("LoRA count is %s. Only up to 4 LoRAs are supported.", len(loras) + len(lora_pairs))
+            remaining = max(0, 4 - len(loras))
+            loras = loras[:4]
+            lora_pairs = lora_pairs[:remaining]
         
         # Configure API input data
         input_data = {
@@ -294,17 +317,26 @@ class GenerateVideoClient:
             "seed": seed,
             "cfg": cfg,
             "context_overlap": context_overlap,
-            "lora_pairs": lora_pairs,
             "output_mode": output_mode,
             "refresh_worker": refresh_worker
         }
 
+        if loras:
+            input_data["loras"] = loras
+        if lora_pairs:
+            input_data["lora_pairs"] = lora_pairs
+
         if model_profile:
             input_data["model_profile"] = model_profile
         if gpu_profile:
+            logger.warning("`gpu_profile` is deprecated as a request field. Prefer `model_profile` or endpoint-level defaults.")
             input_data["gpu_profile"] = gpu_profile
         if target_vram_gb is not None:
             input_data["target_vram_gb"] = target_vram_gb
+        if civitai_token:
+            input_data["civitai_token"] = civitai_token
+        if huggingface_token:
+            input_data["huggingface_token"] = huggingface_token
         
         # Add negative_prompt if provided
         if negative_prompt:
@@ -332,10 +364,13 @@ class GenerateVideoClient:
         seed: int = 42,
         cfg: float = 2.0,
         context_overlap: int = 48,
+        loras: Optional[List[Dict[str, Any]]] = None,
         lora_pairs: Optional[List[Dict[str, Any]]] = None,
         model_profile: Optional[str] = None,
         gpu_profile: Optional[str] = None,
         target_vram_gb: Optional[int] = None,
+        civitai_token: Optional[str] = None,
+        huggingface_token: Optional[str] = None,
         output_mode: str = "auto",
         refresh_worker: bool = False
     ) -> Dict[str, Any]:
@@ -355,10 +390,13 @@ class GenerateVideoClient:
             seed: Seed value
             cfg: CFG scale
             context_overlap: Context overlap
+            loras: Preferred LoRA list
             lora_pairs: LoRA settings list
             model_profile: Explicit Wan 2.2 model profile
-            gpu_profile: Optimization target
+            gpu_profile: Deprecated optimization hint
             target_vram_gb: VRAM target used for automatic model selection
+            civitai_token: Optional Civitai token
+            huggingface_token: Optional Hugging Face token
             output_mode: `auto`, `base64`, or `bucket_url`
             refresh_worker: Ask RunPod to recycle the worker after each job
         
@@ -408,10 +446,13 @@ class GenerateVideoClient:
                 seed=seed,
                 cfg=cfg,
                 context_overlap=context_overlap,
+                loras=loras,
                 lora_pairs=lora_pairs,
                 model_profile=model_profile,
                 gpu_profile=gpu_profile,
                 target_vram_gb=target_vram_gb,
+                civitai_token=civitai_token,
+                huggingface_token=huggingface_token,
                 output_mode=output_mode,
                 refresh_worker=refresh_worker
             )
@@ -495,12 +536,10 @@ def main():
     
     # Example 2: Processing with LoRA
     print("2. Processing with LoRA")
-    lora_pairs = [
+    loras = [
         {
-            "high": "your_high_lora.safetensors",
-            "low": "your_low_lora.safetensors",
-            "high_weight": 1.0,
-            "low_weight": 1.0
+            "source": "https://huggingface.co/your-org/your-repo/resolve/main/loras/your_style_lora.safetensors",
+            "weight": 0.8,
         }
     ]
     
@@ -514,8 +553,8 @@ def main():
         steps=10,
         seed=42,
         cfg=2.0,
-        lora_pairs=lora_pairs,
-        gpu_profile="L40S_48GB"
+        loras=loras,
+        model_profile="fp8_e4m3fn"
     )
     
     if result2.get('status') == 'COMPLETED':

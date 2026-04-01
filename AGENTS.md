@@ -9,7 +9,6 @@ The worker supports:
 - Wan 2.2 FP8 model selection
 - Wan 2.2 GGUF quantized model selection
 - VRAM-driven automatic profile selection
-- GPU profile driven automatic profile selection
 - RunPod-friendly output modes (`base64` or bucket upload URL)
 - Thin Docker image strategy: ComfyUI/custom nodes in image, heavy Wan assets lazy-downloaded
 
@@ -33,7 +32,7 @@ The worker supports:
 ## Local UI Behavior
 
 - `local_ui_server.py` persists non-file form settings in browser `localStorage` so they survive tab close and browser restarts.
-- `runpod_api_key` is treated as sensitive and should only be persisted when the UI explicitly opts in.
+- Secret fields such as `runpod_api_key`, `civitai_token`, and `huggingface_token` should only be persisted when the UI explicitly opts in.
 - Do not try to persist file input values. Browsers block restoring them for security reasons.
 - When changing the local UI, update both this guide and `USER_GUIDE.md` if persistence or security behavior changes.
 
@@ -51,10 +50,14 @@ Supported request fields:
 
 - `model_profile`
   Explicit profile such as `fp8_e4m3fn`, `fp8_e5m2`, `gguf_q4_k_m`, `gguf_q5_k_m`.
-- `gpu_profile`
-  Optimization target such as `L4_24GB`, `RTX_4090_24GB`, `L40S_48GB`, `A100_80GB`.
+- `loras`
+  Preferred custom LoRA input. Each entry may be a string or object and can reference an already-mounted filename, a direct file download URL, a Civitai model page URL with `modelVersionId`, a Civitai download URL, or a Hugging Face file URL.
 - `target_vram_gb`
-  Automatic profile selection by VRAM target.
+  Advanced automatic profile selection by VRAM target.
+- `gpu_profile`
+  Deprecated compatibility hint that maps to an internal model recommendation only.
+- `civitai_token` / `huggingface_token`
+  Optional tokens for gated/private LoRA downloads.
 
 Selection precedence:
 
@@ -67,7 +70,7 @@ Selection precedence:
 ## RunPod-Specific Notes
 
 - Physical GPU choice is not made inside the handler.
-  RunPod Serverless hardware is configured on the endpoint itself. The request-level `gpu_profile` in this repo is an optimization hint, not infrastructure provisioning.
+  RunPod Serverless hardware is configured on the endpoint itself. The request-level `gpu_profile` in this repo is a deprecated optimization hint, not infrastructure provisioning.
 - Large outputs should prefer bucket upload.
   `output_mode=auto` uses `bucket_url` when either RunPod bucket environment variables or top-level request `s3Config` are present.
 - Models are resolved lazily.
@@ -75,6 +78,7 @@ Selection precedence:
 - If `/runpod-volume` is out of space during lazy download, asset download falls back to the writable local ComfyUI model directories.
 - `refresh_worker` is supported for fragmentation-sensitive or profile-switch-heavy workloads.
 - Inline `base64` video output is guarded by a conservative encoded-size limit because RunPod response payload limits are much smaller than typical generated MP4 files.
+- Handler and client logs should redact tokens and large base64 blobs. Keep that behavior when changing request logging.
 
 ## RunPod Compatibility Snapshot
 
@@ -96,6 +100,7 @@ Checked against RunPod Serverless docs on 2026-04-01.
 - Do not break workflow node IDs unless the JSON workflows are updated together with the handler.
 - GGUF models must keep `quantization=disabled` at request construction time because the WanVideo wrapper converts GGUF internally.
 - LoRA behavior depends on ComfyUI-WanVideoWrapper semantics. GGUF and scaled FP8 should continue using unmerged LoRA behavior.
+- Generic `loras` entries are currently normalized to the same filename on both HIGH and LOW LoRA branches. Keep that behavior in mind when changing custom LoRA support.
 
 ## Operational Recommendations
 

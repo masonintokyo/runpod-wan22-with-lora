@@ -27,25 +27,10 @@ RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
 
 MODEL_OPTIONS = [
-    "fp8_e4m3fn",
-    "fp8_e5m2",
-    "gguf_q2_k",
-    "gguf_q3_k_m",
     "gguf_q4_k_m",
     "gguf_q5_k_m",
     "gguf_q6_k",
-    "gguf_q8_0",
-]
-
-GPU_OPTIONS = [
-    "L4_24GB",
-    "RTX_4090_24GB",
-    "A5000_24GB",
-    "A40_48GB",
-    "L40S_48GB",
-    "RTX_PRO_6000_48GB",
-    "A100_80GB",
-    "H100_80GB",
+    "fp8_e4m3fn",
 ]
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -65,10 +50,29 @@ def render_options(options, selected):
     return "".join(parts)
 
 
+def parse_lora_sources(raw_value: str):
+    loras = []
+    for line_number, raw_line in enumerate(raw_value.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        source, separator, weight_text = line.partition("|")
+        source = source.strip()
+        if not source:
+            continue
+        weight = 1.0
+        if separator:
+            try:
+                weight = float(weight_text.strip())
+            except ValueError as exc:
+                raise ValueError(f"Invalid LoRA weight on line {line_number}: {weight_text.strip()}") from exc
+        loras.append({"source": source, "weight": weight})
+    return loras
+
+
 def render_page(values=None, result=None, error=None):
     values = values or {}
-    model_options = render_options(MODEL_OPTIONS, values.get("model_profile", "gguf_q4_k_m"))
-    gpu_options = render_options(GPU_OPTIONS, values.get("gpu_profile", ""))
+    model_options = render_options(MODEL_OPTIONS, values.get("model_profile", ""))
     output_mode = values.get("output_mode", "auto")
     result_block = ""
     if error:
@@ -150,6 +154,7 @@ def render_page(values=None, result=None, error=None):
       cursor: pointer;
     }}
     .hint {{ font-size: 13px; color: var(--muted); }}
+    .mono {{ font-family: "SFMono-Regular", Menlo, Consolas, monospace; }}
     .persist-note {{
       margin-top: 12px;
       padding: 12px 14px;
@@ -158,6 +163,30 @@ def render_page(values=None, result=None, error=None):
       border: 1px solid var(--line);
       font-size: 13px;
       color: var(--muted);
+    }}
+    .guide {{
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }}
+    .guide pre {{
+      margin: 10px 0 0;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.68);
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(214,207,194,0.75);
+      vertical-align: top;
     }}
     .result, .error {{
       margin-top: 20px;
@@ -178,7 +207,7 @@ def render_page(values=None, result=None, error=None):
 <body>
   <div class="wrap">
     <h1>Wan 2.2 RunPod Local UI</h1>
-    <p class="lead">Upload an image, choose a model profile, and submit a job to your RunPod Serverless endpoint. Use either <code>model_profile</code> or <code>gpu_profile</code>/<code>target_vram_gb</code>.</p>
+    <p class="lead">Upload an image, optionally override the model profile, and submit a job to your RunPod Serverless endpoint. The endpoint GPU itself is configured in RunPod, not in this form. Custom LoRAs accept mounted filenames, Civitai model URLs, Civitai download URLs, or Hugging Face file URLs.</p>
     <div class="grid">
       <div class="card">
         <form id="job-form" action="/submit" method="post" enctype="multipart/form-data">
@@ -190,7 +219,7 @@ def render_page(values=None, result=None, error=None):
             <label>API Key</label>
             <input type="password" name="runpod_api_key" value="{html.escape(values.get("runpod_api_key", RUNPOD_API_KEY))}" required>
           </div>
-          <label class="check"><input type="checkbox" name="remember_api_key"> Remember API key in this browser</label>
+          <label class="check"><input type="checkbox" name="remember_api_key"> Remember secret fields in this browser</label>
           <div class="field">
             <label>Prompt</label>
             <textarea name="prompt" required>{html.escape(values.get("prompt", "cinematic portrait, subtle head turn, natural motion, realistic lighting"))}</textarea>
@@ -233,18 +262,8 @@ def render_page(values=None, result=None, error=None):
           </div>
           <div class="row">
             <div class="field">
-              <label>Model Profile</label>
+              <label>Model Profile Override</label>
               <select name="model_profile">{model_options}</select>
-            </div>
-            <div class="field">
-              <label>GPU Profile</label>
-              <select name="gpu_profile">{gpu_options}</select>
-            </div>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label>Target VRAM GB</label>
-              <input name="target_vram_gb" value="{html.escape(values.get("target_vram_gb", ""))}">
             </div>
             <div class="field">
               <label>Output Mode</label>
@@ -257,46 +276,58 @@ def render_page(values=None, result=None, error=None):
           </div>
           <div class="row">
             <div class="field">
-              <label>High LoRA File Name</label>
-              <input name="lora_high" value="{html.escape(values.get("lora_high", ""))}" placeholder="example_high.safetensors">
+              <label>Custom LoRA</label>
+              <textarea name="lora_sources" placeholder="one per line: source | weight">{html.escape(values.get("lora_sources", ""))}</textarea>
             </div>
             <div class="field">
-              <label>Low LoRA File Name</label>
-              <input name="lora_low" value="{html.escape(values.get("lora_low", ""))}" placeholder="example_low.safetensors">
-            </div>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label>High LoRA Weight</label>
-              <input name="lora_high_weight" value="{html.escape(values.get("lora_high_weight", "1.0"))}">
-            </div>
-            <div class="field">
-              <label>Low LoRA Weight</label>
-              <input name="lora_low_weight" value="{html.escape(values.get("lora_low_weight", "1.0"))}">
+              <label>Civitai Token</label>
+              <input type="password" name="civitai_token" value="{html.escape(values.get("civitai_token", ""))}" placeholder="optional for gated/private Civitai downloads">
+              <div class="field" style="margin-top:14px;">
+                <label>Hugging Face Token</label>
+                <input type="password" name="huggingface_token" value="{html.escape(values.get("huggingface_token", ""))}" placeholder="optional for gated/private Hugging Face repos">
+              </div>
             </div>
           </div>
           <label class="check"><input type="checkbox" name="refresh_worker" {"checked" if values.get("refresh_worker") else ""}> Refresh worker after completion</label>
           <div class="persist-note">
-            Endpoint ID and generation settings are saved in this browser automatically. API key is only saved if you enable "Remember API key in this browser".
+            Endpoint ID and generation settings are saved in this browser automatically. Secret fields are only saved if you enable "Remember secret fields in this browser".
           </div>
           <button type="submit">Submit Job</button>
         </form>
         {result_block}
       </div>
       <div class="card">
-        <h2>Practical Defaults</h2>
-        <ul>
-          <li>24GB GPU class: use <code>gguf_q4_k_m</code>.</li>
-          <li>48GB+ GPU class: use <code>fp8_e4m3fn</code>.</li>
-          <li>If you do not know the hardware, leave <code>model_profile</code> empty and set <code>target_vram_gb</code>.</li>
-          <li>Image-to-video requires an input image.</li>
-          <li>Default lightning LoRAs are fetched lazily as <code>high_noise_model.safetensors</code> and <code>low_noise_model.safetensors</code>.</li>
-          <li>Custom LoRAs should be placed in <code>/runpod-volume/loras</code>.</li>
-        </ul>
-        <h2>LoRA Notes</h2>
-        <p class="hint">Start with <code>1.0</code> for both weights. If motion becomes unstable, reduce toward <code>0.7</code> to <code>0.9</code>. If the LoRA is very stylized, keep it below <code>0.8</code> first.</p>
-        <h2>Prompt Notes</h2>
-        <p class="hint">Prompts work best when they describe motion and camera behavior. Example: <code>subtle head turn, gentle blinking, cinematic lighting, natural motion</code>.</p>
+        <h2>Model Guide</h2>
+        <table>
+          <tr><th>Endpoint VRAM</th><th>Recommended `model_profile`</th></tr>
+          <tr><td>24GB</td><td><code>gguf_q4_k_m</code></td></tr>
+          <tr><td>32GB</td><td><code>gguf_q5_k_m</code></td></tr>
+          <tr><td>40GB</td><td><code>gguf_q6_k</code></td></tr>
+          <tr><td>48GB+</td><td><code>fp8_e4m3fn</code></td></tr>
+        </table>
+        <p class="hint">If you do not know the hardware, leave <code>model_profile</code> empty and let the endpoint default decide. RunPod Serverless does not accept GPU choice in the request body.</p>
+
+        <div class="guide">
+          <h2>LoRA Formats</h2>
+          <p class="hint">Enter one LoRA per line as <span class="mono">source | weight</span>. Omit <span class="mono">| weight</span> to use <code>1.0</code>.</p>
+          <pre>my_style_lora.safetensors | 0.8
+https://civitai.com/models/122359/detail-tweaker-xl?modelVersionId=135867 | 0.8
+https://civitai.com/api/download/models/135867 | 0.8
+https://huggingface.co/owner/repo/resolve/main/loras/my_style.safetensors | 0.75
+https://huggingface.co/owner/repo/blob/main/loras/my_style.safetensors | 0.75</pre>
+          <ul>
+            <li>Mounted filename: file must already exist under <code>/runpod-volume/loras</code> or the ComfyUI LoRA directory.</li>
+            <li>Civitai model page URL: include <code>?modelVersionId=...</code>. The backend resolves it to the downloadable file automatically.</li>
+            <li>Civitai download URL: use <code>/api/download/models/&lt;modelVersionId&gt;</code>.</li>
+            <li>Hugging Face: use a file URL under <code>/resolve/</code> or <code>/blob/</code>. The backend normalizes <code>/blob/</code> to <code>/resolve/</code>.</li>
+            <li>For gated or private assets, fill in the matching token field above.</li>
+          </ul>
+        </div>
+
+        <div class="guide">
+          <h2>Prompt Notes</h2>
+          <p class="hint">Prompts work best when they describe motion and camera behavior. Example: <code>subtle head turn, gentle blinking, cinematic lighting, natural motion</code>.</p>
+        </div>
       </div>
     </div>
   </div>
@@ -317,16 +348,11 @@ def render_page(values=None, result=None, error=None):
         "cfg",
         "seed",
         "model_profile",
-        "gpu_profile",
-        "target_vram_gb",
         "output_mode",
-        "lora_high",
-        "lora_low",
-        "lora_high_weight",
-        "lora_low_weight",
+        "lora_sources",
         "refresh_worker",
       ];
-      const sensitiveField = "runpod_api_key";
+      const sensitiveFields = ["runpod_api_key", "civitai_token", "huggingface_token"];
       const rememberField = "remember_api_key";
 
       function loadSettings() {{
@@ -348,7 +374,9 @@ def render_page(values=None, result=None, error=None):
         const rememberApiKey = form.elements.namedItem(rememberField)?.checked;
         saved[rememberField] = Boolean(rememberApiKey);
         if (rememberApiKey) {{
-          saved[sensitiveField] = form.elements.namedItem(sensitiveField)?.value || "";
+          for (const name of sensitiveFields) {{
+            saved[name] = form.elements.namedItem(name)?.value || "";
+          }}
         }}
 
         localStorage.setItem(storageKey, JSON.stringify(saved));
@@ -373,9 +401,13 @@ def render_page(values=None, result=None, error=None):
           rememberCheckbox.checked = rememberApiKey;
         }}
 
-        const apiKeyField = form.elements.namedItem(sensitiveField);
-        if (rememberApiKey && apiKeyField && saved[sensitiveField] && !apiKeyField.value) {{
-          apiKeyField.value = saved[sensitiveField];
+        if (rememberApiKey) {{
+          for (const name of sensitiveFields) {{
+            const field = form.elements.namedItem(name);
+            if (field && saved[name] && !field.value) {{
+              field.value = saved[name];
+            }}
+          }}
         }}
       }}
 
@@ -390,7 +422,9 @@ def render_page(values=None, result=None, error=None):
         rememberCheckbox.addEventListener("change", () => {{
           if (!rememberCheckbox.checked) {{
             const saved = loadSettings();
-            delete saved[sensitiveField];
+            for (const name of sensitiveFields) {{
+              delete saved[name];
+            }}
             saved[rememberField] = false;
             localStorage.setItem(storageKey, JSON.stringify(saved));
           }}
@@ -443,20 +477,13 @@ def submit():
 
         if values.get("model_profile"):
             kwargs["model_profile"] = values["model_profile"]
-        if values.get("gpu_profile"):
-            kwargs["gpu_profile"] = values["gpu_profile"]
-        if values.get("target_vram_gb"):
-            kwargs["target_vram_gb"] = int(values["target_vram_gb"])
-
-        lora_high = values.get("lora_high", "").strip()
-        lora_low = values.get("lora_low", "").strip()
-        if lora_high or lora_low:
-            kwargs["lora_pairs"] = [{
-                "high": lora_high,
-                "low": lora_low,
-                "high_weight": float(values.get("lora_high_weight") or 1.0),
-                "low_weight": float(values.get("lora_low_weight") or 1.0),
-            }]
+        loras = parse_lora_sources(values.get("lora_sources", ""))
+        if loras:
+            kwargs["loras"] = loras
+        if values.get("civitai_token", "").strip():
+            kwargs["civitai_token"] = values["civitai_token"].strip()
+        if values.get("huggingface_token", "").strip():
+            kwargs["huggingface_token"] = values["huggingface_token"].strip()
 
         result = client.create_video_from_image(**kwargs)
         return Response(render_page(values=values, result=result), mimetype="text/html")

@@ -7,7 +7,7 @@ This repository contains a `runpod.io` Serverless worker and a Python client for
 
 - Added selectable Wan 2.2 model profiles
 - Added GGUF quantized Wan 2.2 support
-- Added automatic selection from `gpu_profile` or `target_vram_gb`
+- Added model-profile selection with optional VRAM-driven fallback
 - Added RunPod-friendly output modes: `base64` or `bucket_url`
 - Added lazy download for Wan 2.2 experts, support assets, and default LoRAs into `/runpod-volume`
 
@@ -46,14 +46,15 @@ Core fields:
 - optional `end_image_path`, `end_image_url`, `end_image_base64`
 - `width`, `height`, `length`, `steps`, `seed`, `cfg`
 - optional `lora_pairs`
+  or preferred `loras`
+- optional `civitai_token`, `huggingface_token` for gated/private LoRA downloads
 
 New selection fields:
 
 - `model_profile`
-- `gpu_profile`
-- `target_vram_gb`
 - `output_mode`
 - `refresh_worker`
+- `target_vram_gb` for advanced automatic fallback
 
 ## Python Client Example
 
@@ -134,10 +135,46 @@ These are fetched lazily on first use and then reused from the volume or worker-
 
 Custom LoRAs:
 
-- Put them in `/runpod-volume/loras`
-- Pass them as `lora_pairs`
-- Start with `1.0`
+- Put them in `/runpod-volume/loras` and pass a filename in `loras`
+- Or pass a direct download URL in `loras[].source`
+- Or pass a Civitai model page URL with `modelVersionId`
+- Or pass a Hugging Face `/resolve/` or `/blob/` file URL
+- Start with `0.7` to `1.0`
 - If results become unstable, reduce to `0.7` to `0.9`
+
+Example:
+
+```json
+{
+  "input": {
+    "prompt": "cinematic portrait of a woman slowly turning toward the camera",
+    "image_url": "https://example.com/input.png",
+    "model_profile": "gguf_q4_k_m",
+    "loras": [
+      {
+        "source": "my_style_lora.safetensors",
+        "weight": 0.8
+      },
+      {
+        "source": "https://civitai.com/models/122359/detail-tweaker-xl?modelVersionId=135867",
+        "weight": 0.8
+      },
+      {
+        "source": "https://huggingface.co/owner/repo/resolve/main/loras/my_style.safetensors",
+        "weight": 0.8
+      }
+    ]
+  }
+}
+```
+
+Notes:
+
+- A bare filename is only meaningful if that file already exists under `/runpod-volume/loras` or the ComfyUI LoRA directory.
+- Civitai model page URLs are supported when they include `modelVersionId`; the handler resolves them to the actual downloadable file.
+- Hugging Face file URLs under `/blob/` are normalized to `/resolve/` automatically.
+- For gated or private downloads, pass `civitai_token` or `huggingface_token`.
+- `lora_pairs` remains available as an advanced legacy form for separate high/low LoRA control.
 
 ## cURL Example
 
@@ -176,12 +213,18 @@ uv run python local_ui_server.py
 
 Then open `http://127.0.0.1:8787`.
 
+The UI shows:
+
+- a model guide for 24GB / 32GB / 40GB / 48GB+ endpoint classes
+- LoRA examples for mounted filenames, Civitai model URLs, Civitai download URLs, and Hugging Face file URLs
+- optional Civitai and Hugging Face token inputs for gated/private assets
+
 Python dependencies for the local UI, client, and handler are now managed in [`pyproject.toml`](/Users/jimmy/Projects/generate_video/pyproject.toml) with `uv`.
 
 ## RunPod Notes
 
 - Physical GPU choice is configured on the RunPod endpoint, not inside the handler.
-- `gpu_profile` is an optimization target for model selection, not infrastructure provisioning.
+- The local UI no longer exposes `gpu_profile` because it suggested a hardware choice that RunPod Serverless does not accept in the request body.
 - Use `/runpod-volume/models` and `/runpod-volume/loras` for better cold-start behavior.
 - The current Docker image is intentionally thinner: ComfyUI + custom nodes are baked in, while heavy Wan assets are downloaded only when needed.
 - Prefer `output_mode="bucket_url"` for real video workloads. Inline `base64` is now guarded by a conservative size check because RunPod response payload limits are much smaller than typical MP4 outputs.
@@ -201,7 +244,7 @@ Aligned behaviors:
 
 Important constraints:
 
-- `gpu_profile` in this repo is only an internal model-selection hint. It does not request hardware changes from RunPod.
+- `gpu_profile` is kept only as a backward-compatible internal model-selection hint. It does not request hardware changes from RunPod, and new callers should prefer `model_profile` or endpoint defaults.
 - Large outputs should use object storage. `/run` results are retained for 30 minutes and `/runsync` results for 1 minute, so callers should fetch them promptly.
 - This worker now supports RunPod request-level `s3Config`, but only for uploads triggered by `output_mode="bucket_url"`.
 
