@@ -3,10 +3,17 @@
 # FROM wlsdml1114/multitalk-base:1.7 as runtime
 FROM wlsdml1114/engui_genai-base_blackwell:1.1 as runtime
 
+ENV HF_HUB_ENABLE_HF_TRANSFER=1 \
+    MODEL_ROOT=/runpod-volume/models \
+    DEFAULT_MODEL_PROFILE=fp8_e4m3fn \
+    DEFAULT_OUTPUT_MODE=auto
+
 RUN pip install -U "huggingface_hub[hf_transfer]"
 RUN pip install runpod websocket-client
 
 WORKDIR /
+
+RUN mkdir -p /runpod-volume/models /runpod-volume/loras
 
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git && \
     cd /ComfyUI && \

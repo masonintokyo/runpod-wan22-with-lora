@@ -42,6 +42,20 @@ class GenerateVideoClient:
         })
         
         logger.info(f"GenerateVideoClient initialized - Endpoint: {runpod_endpoint_id}")
+
+    @staticmethod
+    def extract_output_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize RunPod output payload.
+
+        RunPod strips `refresh_worker` before returning the job output, but the
+        remaining payload can still be wrapped under `job_results` depending on
+        handler structure.
+        """
+        output = result.get("output", {})
+        if isinstance(output, dict) and "job_results" in output:
+            return output["job_results"]
+        return output
     
     def encode_file_to_base64(self, file_path: str) -> Optional[str]:
         """
@@ -178,17 +192,23 @@ class GenerateVideoClient:
                 return False
             
             output = result.get('output', {})
+            output = self.extract_output_payload({"output": output})
             video_b64 = output.get('video')
+            video_url = output.get('video_url')
             
-            if not video_b64:
-                logger.error("Video data not found")
-                return False
+            if video_url and not video_b64:
+                response = self.session.get(video_url, timeout=300)
+                response.raise_for_status()
+                decoded_video = response.content
+            else:
+                if not video_b64:
+                    logger.error("Video data not found")
+                    return False
+                decoded_video = base64.b64decode(video_b64)
             
             # Create directory
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
-            # Decode base64 and save video
-            decoded_video = base64.b64decode(video_b64)
+            output_dir = os.path.dirname(output_path) or "."
+            os.makedirs(output_dir, exist_ok=True)
             
             with open(output_path, 'wb') as f:
                 f.write(decoded_video)
@@ -213,7 +233,12 @@ class GenerateVideoClient:
         seed: int = 42,
         cfg: float = 2.0,
         context_overlap: int = 48,
-        lora_pairs: Optional[List[Dict[str, Any]]] = None
+        lora_pairs: Optional[List[Dict[str, Any]]] = None,
+        model_profile: Optional[str] = None,
+        gpu_profile: Optional[str] = None,
+        target_vram_gb: Optional[int] = None,
+        output_mode: str = "auto",
+        refresh_worker: bool = False
     ) -> Dict[str, Any]:
         """
         Generate video from image
@@ -230,6 +255,11 @@ class GenerateVideoClient:
             cfg: CFG scale
             context_overlap: Context overlap
             lora_pairs: LoRA settings list (max 4)
+            model_profile: Explicit Wan 2.2 model profile such as `fp8_e4m3fn` or `gguf_q4_k_m`
+            gpu_profile: Optimization target such as `L4_24GB` or `L40S_48GB`
+            target_vram_gb: VRAM target used for automatic model selection
+            output_mode: `auto`, `base64`, or `bucket_url`
+            refresh_worker: Ask RunPod to recycle the worker after the job
         
         Returns:
             Job result dictionary
@@ -264,8 +294,17 @@ class GenerateVideoClient:
             "seed": seed,
             "cfg": cfg,
             "context_overlap": context_overlap,
-            "lora_pairs": lora_pairs
+            "lora_pairs": lora_pairs,
+            "output_mode": output_mode,
+            "refresh_worker": refresh_worker
         }
+
+        if model_profile:
+            input_data["model_profile"] = model_profile
+        if gpu_profile:
+            input_data["gpu_profile"] = gpu_profile
+        if target_vram_gb is not None:
+            input_data["target_vram_gb"] = target_vram_gb
         
         # Add negative_prompt if provided
         if negative_prompt:
@@ -293,7 +332,12 @@ class GenerateVideoClient:
         seed: int = 42,
         cfg: float = 2.0,
         context_overlap: int = 48,
-        lora_pairs: Optional[List[Dict[str, Any]]] = None
+        lora_pairs: Optional[List[Dict[str, Any]]] = None,
+        model_profile: Optional[str] = None,
+        gpu_profile: Optional[str] = None,
+        target_vram_gb: Optional[int] = None,
+        output_mode: str = "auto",
+        refresh_worker: bool = False
     ) -> Dict[str, Any]:
         """
         Batch process all image files in folder
@@ -312,6 +356,11 @@ class GenerateVideoClient:
             cfg: CFG scale
             context_overlap: Context overlap
             lora_pairs: LoRA settings list
+            model_profile: Explicit Wan 2.2 model profile
+            gpu_profile: Optimization target
+            target_vram_gb: VRAM target used for automatic model selection
+            output_mode: `auto`, `base64`, or `bucket_url`
+            refresh_worker: Ask RunPod to recycle the worker after each job
         
         Returns:
             Batch processing result dictionary
@@ -359,7 +408,12 @@ class GenerateVideoClient:
                 seed=seed,
                 cfg=cfg,
                 context_overlap=context_overlap,
-                lora_pairs=lora_pairs
+                lora_pairs=lora_pairs,
+                model_profile=model_profile,
+                gpu_profile=gpu_profile,
+                target_vram_gb=target_vram_gb,
+                output_mode=output_mode,
+                refresh_worker=refresh_worker
             )
             
             if result.get('status') == 'COMPLETED':
@@ -427,7 +481,9 @@ def main():
         length=81,
         steps=10,
         seed=42,
-        cfg=2.0
+        cfg=2.0,
+        model_profile="gguf_q4_k_m",
+        output_mode="auto"
     )
     
     if result1.get('status') == 'COMPLETED':
@@ -458,7 +514,8 @@ def main():
         steps=10,
         seed=42,
         cfg=2.0,
-        lora_pairs=lora_pairs
+        lora_pairs=lora_pairs,
+        gpu_profile="L40S_48GB"
     )
     
     if result2.get('status') == 'COMPLETED':
