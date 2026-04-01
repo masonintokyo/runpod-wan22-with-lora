@@ -118,6 +118,7 @@ Python 依存関係は [`pyproject.toml`](/Users/jimmy/Projects/generate_video/p
 - `/runpod-volume/loras` を使う
 - 出力は可能なら `bucket_url` を使う
 - 頻繁にモデルを切り替える場合は `refresh_worker` を検討する
+- `/runpod-volume` が満杯なら、lazy download は worker ローカルの ComfyUI model ディレクトリへフォールバックします
 
 ## RunPod Serverless 仕様との整合
 

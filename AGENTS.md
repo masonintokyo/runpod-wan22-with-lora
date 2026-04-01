@@ -65,6 +65,7 @@ Selection precedence:
   `output_mode=auto` uses `bucket_url` when either RunPod bucket environment variables or top-level request `s3Config` are present.
 - Models are resolved lazily.
   Missing diffusion models, support assets, and default LoRAs are downloaded on demand into `/runpod-volume` when available.
+- If `/runpod-volume` is out of space during lazy download, asset download falls back to the writable local ComfyUI model directories.
 - `refresh_worker` is supported for fragmentation-sensitive or profile-switch-heavy workloads.
 - Inline `base64` video output is guarded by a conservative encoded-size limit because RunPod response payload limits are much smaller than typical generated MP4 files.
 

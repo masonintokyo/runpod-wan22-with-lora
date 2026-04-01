@@ -1,5 +1,6 @@
 import base64
 import binascii
+import errno
 import json
 import logging
 import os
@@ -275,35 +276,66 @@ def download_to_path(url: str, output_path: Path, timeout: int = 600) -> Path:
             tmp_path.unlink(missing_ok=True)
 
 
-def resolve_model_target(subdir: str, filename: str) -> Path:
-    return MODEL_BASE_ROOT / subdir / filename
+def candidate_model_targets(subdir: str, filename: str) -> Tuple[Path, ...]:
+    candidates = [MODEL_BASE_ROOT / subdir / filename]
+    fallback = COMFY_MODEL_BASE / subdir / filename
+    if fallback not in candidates:
+        candidates.append(fallback)
+    return tuple(candidates)
 
 
-def resolve_lora_target(filename: str) -> Path:
-    return LORA_ROOT / filename
+def candidate_lora_targets(filename: str) -> Tuple[Path, ...]:
+    candidates = [LORA_ROOT / filename]
+    fallback = COMFY_LORA_DIR / filename
+    if fallback not in candidates:
+        candidates.append(fallback)
+    return tuple(candidates)
 
 
-def ensure_asset_available(asset: Dict[str, str], target_path: Path, progress_message: Optional[str] = None) -> str:
-    ensure_directory(target_path.parent)
-    if not target_path.exists():
-        if progress_message:
-            logger.info(progress_message)
-        download_to_path(asset["url"], target_path)
-    return target_path.name
+def ensure_asset_available(asset: Dict[str, str], target_paths: Tuple[Path, ...], progress_message: Optional[str] = None) -> str:
+    for target_path in target_paths:
+        if target_path.exists():
+            return target_path.name
+
+    if progress_message:
+        logger.info(progress_message)
+
+    last_error: Optional[Exception] = None
+    for index, target_path in enumerate(target_paths):
+        try:
+            ensure_directory(target_path.parent)
+            download_to_path(asset["url"], target_path)
+            return target_path.name
+        except OSError as exc:
+            last_error = exc
+            is_last_target = index == len(target_paths) - 1
+            if exc.errno == errno.ENOSPC and not is_last_target:
+                logger.warning(
+                    "No space left while downloading %s to %s. Retrying with fallback path %s",
+                    asset["filename"],
+                    target_path,
+                    target_paths[index + 1],
+                )
+                continue
+            raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Failed to ensure asset is available: {asset['filename']}")
 
 
 def ensure_support_assets(job: Dict[str, Any]) -> None:
     progress(job, "Ensuring shared Wan support assets are available")
     for asset_name, asset in SUPPORT_ASSETS.items():
-        target_path = resolve_model_target(asset["subdir"], asset["filename"])
-        ensure_asset_available(asset, target_path, f"Downloading support asset '{asset_name}'")
+        target_paths = candidate_model_targets(asset["subdir"], asset["filename"])
+        ensure_asset_available(asset, target_paths, f"Downloading support asset '{asset_name}'")
 
 
 def ensure_default_loras(job: Dict[str, Any]) -> None:
     progress(job, "Ensuring default lightning LoRAs are available")
     for lora_name, asset in DEFAULT_LORA_ASSETS.items():
-        target_path = resolve_lora_target(asset["filename"])
-        ensure_asset_available(asset, target_path, f"Downloading default LoRA '{lora_name}'")
+        target_paths = candidate_lora_targets(asset["filename"])
+        ensure_asset_available(asset, target_paths, f"Downloading default LoRA '{lora_name}'")
 
 
 def process_input(input_data: str, temp_dir: str, output_filename: str, input_type: str) -> str:
@@ -452,13 +484,13 @@ def ensure_model_profile_available(profile_key: str, profile: Dict[str, Any], jo
     progress(job, f"Ensuring model profile '{profile_key}' is available")
     resolved_files = {}
     for expert_name, file_info in profile["files"].items():
-        target_path = resolve_model_target(file_info["subdir"], file_info["filename"])
+        target_paths = candidate_model_targets(file_info["subdir"], file_info["filename"])
         ensure_asset_available(
             file_info,
-            target_path,
+            target_paths,
             f"Downloading {expert_name} expert for '{profile_key}'",
         )
-        resolved_files[expert_name] = target_path.name
+        resolved_files[expert_name] = file_info["filename"]
     return resolved_files
 
 

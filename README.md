@@ -186,6 +186,7 @@ Python dependencies for the local UI, client, and handler are now managed in [`p
 - The current Docker image is intentionally thinner: ComfyUI + custom nodes are baked in, while heavy Wan assets are downloaded only when needed.
 - Prefer `output_mode="bucket_url"` for real video workloads. Inline `base64` is now guarded by a conservative size check because RunPod response payload limits are much smaller than typical MP4 outputs.
 - `output_mode="bucket_url"` now works with either endpoint-level bucket environment variables or request-level top-level `s3Config`.
+- If `/runpod-volume` runs out of space during lazy download, the worker now retries the asset download into the writable local ComfyUI model directory.
 
 ## RunPod Compatibility Audit
 
