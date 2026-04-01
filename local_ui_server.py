@@ -3,10 +3,10 @@
 Local UI for submitting image-to-video jobs to a RunPod endpoint.
 
 Setup:
-  python -m pip install flask requests
+  uv sync
   export RUNPOD_API_KEY=...
   export RUNPOD_ENDPOINT_ID=...
-  python local_ui_server.py
+  uv run python local_ui_server.py
 """
 
 import html

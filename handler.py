@@ -41,6 +41,7 @@ LORA_ROOT = Path(
     )
 )
 DEFAULT_MODEL_PROFILE = os.getenv("DEFAULT_MODEL_PROFILE", "fp8_e4m3fn")
+MAX_INLINE_BASE64_BYTES = int(os.getenv("MAX_INLINE_BASE64_BYTES", "9000000"))
 
 DEFAULT_NEGATIVE_PROMPT = (
     "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, "
@@ -474,25 +475,70 @@ def apply_model_profile(prompt_payload: Dict[str, Any], profile_key: str, profil
     )
 
 
-def resolve_output_mode(job_input: Dict[str, Any]) -> str:
-    output_mode = job_input.get("output_mode", DEFAULT_OUTPUT_MODE)
-    if output_mode not in {"auto", "base64", "bucket_url"}:
-        raise ValueError("output_mode must be one of: auto, base64, bucket_url")
+def get_bucket_config(job: Dict[str, Any]) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    request_bucket = job.get("s3Config") or {}
+    if request_bucket:
+        required = {"accessId", "accessSecret", "bucketName", "endpointUrl"}
+        missing = sorted(required - set(request_bucket))
+        if missing:
+            raise ValueError(
+                "s3Config is missing required fields: "
+                + ", ".join(missing)
+            )
+        return (
+            {
+                "accessId": request_bucket["accessId"],
+                "accessSecret": request_bucket["accessSecret"],
+                "endpointUrl": request_bucket["endpointUrl"],
+            },
+            request_bucket["bucketName"],
+        )
 
-    has_bucket_config = bool(
+    has_bucket_env = bool(
         os.getenv("BUCKET_ENDPOINT_URL")
         and os.getenv("BUCKET_ACCESS_KEY_ID")
         and os.getenv("BUCKET_SECRET_ACCESS_KEY")
     )
+    if has_bucket_env:
+        return None, None
+    return None, None
+
+
+def resolve_output_mode(job: Dict[str, Any], job_input: Dict[str, Any]) -> str:
+    output_mode = job_input.get("output_mode", DEFAULT_OUTPUT_MODE)
+    if output_mode not in {"auto", "base64", "bucket_url"}:
+        raise ValueError("output_mode must be one of: auto, base64, bucket_url")
+
+    bucket_creds, bucket_name = get_bucket_config(job)
+    has_bucket_config = bool(bucket_creds or bucket_name or (
+        os.getenv("BUCKET_ENDPOINT_URL")
+        and os.getenv("BUCKET_ACCESS_KEY_ID")
+        and os.getenv("BUCKET_SECRET_ACCESS_KEY")
+    ))
     if output_mode == "auto":
         return "bucket_url" if has_bucket_config else "base64"
     if output_mode == "bucket_url" and not has_bucket_config:
-        raise ValueError("output_mode='bucket_url' requires RunPod bucket environment variables.")
+        raise ValueError(
+            "output_mode='bucket_url' requires either top-level s3Config or "
+            "RunPod bucket environment variables."
+        )
     return output_mode
 
 
+def ensure_inline_output_size(video_path: str) -> None:
+    video_size = os.path.getsize(video_path)
+    encoded_size = ((video_size + 2) // 3) * 4
+    if encoded_size > MAX_INLINE_BASE64_BYTES:
+        raise ValueError(
+            "Generated video is too large for inline base64 output under conservative "
+            f"RunPod payload limits (encoded_size={encoded_size} bytes, "
+            f"limit={MAX_INLINE_BASE64_BYTES} bytes). Use output_mode='bucket_url' "
+            "with endpoint bucket environment variables or top-level s3Config."
+        )
+
+
 def build_output(video_path: str, job: Dict[str, Any], job_input: Dict[str, Any], profile_key: str, selection_reason: str) -> Dict[str, Any]:
-    output_mode = resolve_output_mode(job_input)
+    output_mode = resolve_output_mode(job, job_input)
     payload: Dict[str, Any] = {
         "model_profile": profile_key,
         "model_selection_reason": selection_reason,
@@ -502,13 +548,17 @@ def build_output(video_path: str, job: Dict[str, Any], job_input: Dict[str, Any]
     if output_mode == "bucket_url":
         progress(job, "Uploading generated video to object storage")
         filename = os.path.basename(video_path)
+        bucket_creds, bucket_name = get_bucket_config(job)
         video_url = rp_upload.upload_file_to_bucket(
             file_name=filename,
             file_location=video_path,
+            bucket_creds=bucket_creds,
+            bucket_name=bucket_name,
             prefix=f"{job['id']}/",
         )
         payload["video_url"] = video_url
     else:
+        ensure_inline_output_size(video_path)
         progress(job, "Encoding generated video to base64")
         with open(video_path, "rb") as handle:
             payload["video"] = base64.b64encode(handle.read()).decode("utf-8")

@@ -4,7 +4,8 @@
 FROM wlsdml1114/engui_genai-base_blackwell:1.1 as runtime
 
 ENV HF_HUB_ENABLE_HF_TRANSFER=1 \
-    MODEL_ROOT=/runpod-volume/models \
+    MODEL_BASE_ROOT=/runpod-volume/models \
+    LORA_ROOT=/runpod-volume/loras \
     DEFAULT_MODEL_PROFILE=fp8_e4m3fn \
     DEFAULT_OUTPUT_MODE=auto
 

@@ -11,6 +11,7 @@
 - `model_profile` を明示してモデルを切り替える
 - `gpu_profile` または `target_vram_gb` から自動で適切なモデルを選ばせる
 - 出力を `base64` か `bucket_url` で返す
+- RunPod のリクエスト上位 `s3Config` を使ったアップロードもできる
 
 ## 重要な前提
 
@@ -101,13 +102,15 @@ custom LoRA を使う場合:
 起動方法:
 
 ```bash
-python -m pip install flask requests
+uv sync
 export RUNPOD_ENDPOINT_ID=your-endpoint-id
 export RUNPOD_API_KEY=your-api-key
-python local_ui_server.py
+uv run python local_ui_server.py
 ```
 
 その後 `http://127.0.0.1:8787` を開いて使えます。
+
+Python 依存関係は [`pyproject.toml`](/Users/jimmy/Projects/generate_video/pyproject.toml) で管理します。`local_ui_server.py` だけでなく、`generate_video_client.py` と `handler.py` の実行依存もここに寄せています。
 
 ## RunPod で効率よく使うための推奨
 
@@ -115,6 +118,22 @@ python local_ui_server.py
 - `/runpod-volume/loras` を使う
 - 出力は可能なら `bucket_url` を使う
 - 頻繁にモデルを切り替える場合は `refresh_worker` を検討する
+
+## RunPod Serverless 仕様との整合
+
+この worker は、RunPod Serverless の標準 handler 方式に沿っています。
+
+- `runpod.serverless.start({"handler": handler})` で起動する
+- `refresh_worker` は RunPod が解釈できる返却形式で返す
+- progress update は補助的に送る
+- network volume は `/runpod-volume` 前提で使う
+
+注意点:
+
+- RunPod のレスポンス payload 制限に対して、動画を `base64` で返すのは危険です。このため現在は inline 出力サイズを保守的に制限しています。
+- そのため、実運用では `output_mode="bucket_url"` を推奨します。
+- `bucket_url` は endpoint の環境変数だけでなく、RunPod リクエスト上位の `s3Config` でも使えます。
+- この worker は `/run` と `/runsync` を自動判別してしきい値を変えていません。安全側に倒した共通上限で判定します。
 
 ## よくある誤解
 

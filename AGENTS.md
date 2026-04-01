@@ -27,6 +27,14 @@ The worker supports:
   Start/end image workflow.
 - `extra_model_paths.yaml`
   Includes `/runpod-volume/models` and `/runpod-volume/loras`, which is important for RunPod deployment efficiency.
+- `pyproject.toml`
+  Python dependency management for local development via `uv`. Covers the local UI, reference client, and handler-side Python packages used in this repository.
+
+## Local Python Dependency Management
+
+- Use `uv sync` for local environment setup.
+- Use `uv run python local_ui_server.py` to start the local UI.
+- When adding Python dependencies for local scripts, update `pyproject.toml` instead of documenting ad-hoc `pip install ...` commands.
 
 ## Current Model Selection Design
 
@@ -54,10 +62,19 @@ Selection precedence:
 - Physical GPU choice is not made inside the handler.
   RunPod Serverless hardware is configured on the endpoint itself. The request-level `gpu_profile` in this repo is an optimization hint, not infrastructure provisioning.
 - Large outputs should prefer bucket upload.
-  `output_mode=auto` uses `bucket_url` when RunPod bucket environment variables are present.
+  `output_mode=auto` uses `bucket_url` when either RunPod bucket environment variables or top-level request `s3Config` are present.
 - Models are resolved lazily.
   Missing diffusion models, support assets, and default LoRAs are downloaded on demand into `/runpod-volume` when available.
 - `refresh_worker` is supported for fragmentation-sensitive or profile-switch-heavy workloads.
+- Inline `base64` video output is guarded by a conservative encoded-size limit because RunPod response payload limits are much smaller than typical generated MP4 files.
+
+## RunPod Compatibility Snapshot
+
+Checked against RunPod Serverless docs on 2026-04-01.
+
+- Aligned: standard handler startup, `progress_update`, `refresh_worker`, `/runpod-volume` mount assumptions.
+- Aligned after local fixes: request-level `s3Config` can now be used for `bucket_url` uploads.
+- Remaining operational caveat: the worker does not know whether the caller used `/run` or `/runsync`, so inline payload checks use one conservative threshold instead of endpoint-specific limits.
 
 ## Safe Change Areas
 

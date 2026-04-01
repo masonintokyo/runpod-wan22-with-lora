@@ -1,0 +1,19 @@
+[project]
+name = "generate-video"
+version = "0.1.0"
+description = "RunPod Serverless worker and local UI for Wan 2.2 image-to-video generation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "flask>=3.1,<4",
+  "requests>=2.32,<3",
+  "runpod>=1.7,<2",
+  "websocket-client>=1.8,<2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = false

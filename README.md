@@ -168,13 +168,15 @@ This repository includes a local web UI in [`local_ui_server.py`](/Users/jimmy/P
 Run it like this:
 
 ```bash
-python -m pip install flask requests
+uv sync
 export RUNPOD_ENDPOINT_ID=your-endpoint-id
 export RUNPOD_API_KEY=your-api-key
-python local_ui_server.py
+uv run python local_ui_server.py
 ```
 
 Then open `http://127.0.0.1:8787`.
+
+Python dependencies for the local UI, client, and handler are now managed in [`pyproject.toml`](/Users/jimmy/Projects/generate_video/pyproject.toml) with `uv`.
 
 ## RunPod Notes
 
@@ -182,12 +184,35 @@ Then open `http://127.0.0.1:8787`.
 - `gpu_profile` is an optimization target for model selection, not infrastructure provisioning.
 - Use `/runpod-volume/models` and `/runpod-volume/loras` for better cold-start behavior.
 - The current Docker image is intentionally thinner: ComfyUI + custom nodes are baked in, while heavy Wan assets are downloaded only when needed.
-- Prefer `output_mode="bucket_url"` when bucket credentials are configured.
+- Prefer `output_mode="bucket_url"` for real video workloads. Inline `base64` is now guarded by a conservative size check because RunPod response payload limits are much smaller than typical MP4 outputs.
+- `output_mode="bucket_url"` now works with either endpoint-level bucket environment variables or request-level top-level `s3Config`.
+
+## RunPod Compatibility Audit
+
+Checked against the RunPod Serverless docs current as of 2026-04-01.
+
+Aligned behaviors:
+
+- The worker uses the standard `runpod.serverless.start({"handler": handler})` entrypoint.
+- `refresh_worker` is returned in the documented wrapper shape: `{"refresh_worker": true, "job_results": ...}`.
+- `progress_update` is used as a best-effort progress signal and safely ignored on failure.
+- `/runpod-volume` is treated as the persistent mount point for Serverless network volumes.
+
+Important constraints:
+
+- `gpu_profile` in this repo is only an internal model-selection hint. It does not request hardware changes from RunPod.
+- Large outputs should use object storage. `/run` results are retained for 30 minutes and `/runsync` results for 1 minute, so callers should fetch them promptly.
+- This worker now supports RunPod request-level `s3Config`, but only for uploads triggered by `output_mode="bucket_url"`.
+
+Known non-goals:
+
+- The worker does not auto-provision or auto-switch endpoint GPUs.
+- The worker does not currently infer whether the caller used `/run` or `/runsync`; the inline-size guard therefore uses a conservative shared threshold.
 
 ## References
 
 - RunPod handler docs: https://docs.runpod.io/serverless/workers/handlers/handler-generator
 - RunPod environment variables and bucket uploads: https://docs.runpod.io/serverless/development/environment-variables
-- RunPod endpoint configuration and payload limits: https://docs.runpod.io/serverless/endpoints/endpoint-configurations
+- RunPod request structure, result retention, and `s3Config`: https://docs.runpod.io/serverless/endpoints/send-requests
 - Wan 2.2 model card: https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B
 - ComfyUI WanVideo wrapper: https://github.com/kijai/ComfyUI-WanVideoWrapper
