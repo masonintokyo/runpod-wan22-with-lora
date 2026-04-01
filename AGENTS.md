@@ -30,6 +30,13 @@ The worker supports:
 - `pyproject.toml`
   Python dependency management for local development via `uv`. Covers the local UI, reference client, and handler-side Python packages used in this repository.
 
+## Local UI Behavior
+
+- `local_ui_server.py` persists non-file form settings in browser `localStorage` so they survive tab close and browser restarts.
+- `runpod_api_key` is treated as sensitive and should only be persisted when the UI explicitly opts in.
+- Do not try to persist file input values. Browsers block restoring them for security reasons.
+- When changing the local UI, update both this guide and `USER_GUIDE.md` if persistence or security behavior changes.
+
 ## Local Python Dependency Management
 
 - Use `uv sync` for local environment setup.

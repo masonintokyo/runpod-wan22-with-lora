@@ -110,6 +110,14 @@ uv run python local_ui_server.py
 
 その後 `http://127.0.0.1:8787` を開いて使えます。
 
+UI に入力した設定はブラウザの `localStorage` に保存されるため、同じブラウザならタブを閉じても復元されます。
+
+- 自動保存されるもの: endpoint id、prompt、解像度、steps、LoRA 設定など
+- 明示チェック時のみ保存されるもの: API key
+- 保存されないもの: 画像ファイル本体
+
+`localStorage` は便利ですが、暗号化された秘密保管庫ではありません。同じブラウザプロファイル上でそのページの JavaScript から読めます。したがって、共有PCや、信用できないスクリプトを同一 origin で動かす構成では API key を保存しないでください。ローカル専用UIを自分の端末で使う範囲なら、endpoint id や一般設定の保存は現実的です。
+
 Python 依存関係は [`pyproject.toml`](/Users/jimmy/Projects/generate_video/pyproject.toml) で管理します。`local_ui_server.py` だけでなく、`generate_video_client.py` と `handler.py` の実行依存もここに寄せています。
 
 ## RunPod で効率よく使うための推奨

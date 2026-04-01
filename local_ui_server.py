@@ -150,6 +150,15 @@ def render_page(values=None, result=None, error=None):
       cursor: pointer;
     }}
     .hint {{ font-size: 13px; color: var(--muted); }}
+    .persist-note {{
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.62);
+      border: 1px solid var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }}
     .result, .error {{
       margin-top: 20px;
       padding: 16px;
@@ -172,7 +181,7 @@ def render_page(values=None, result=None, error=None):
     <p class="lead">Upload an image, choose a model profile, and submit a job to your RunPod Serverless endpoint. Use either <code>model_profile</code> or <code>gpu_profile</code>/<code>target_vram_gb</code>.</p>
     <div class="grid">
       <div class="card">
-        <form action="/submit" method="post" enctype="multipart/form-data">
+        <form id="job-form" action="/submit" method="post" enctype="multipart/form-data">
           <div class="field">
             <label>Endpoint ID</label>
             <input name="runpod_endpoint_id" value="{html.escape(values.get("runpod_endpoint_id", RUNPOD_ENDPOINT_ID))}" required>
@@ -181,6 +190,7 @@ def render_page(values=None, result=None, error=None):
             <label>API Key</label>
             <input type="password" name="runpod_api_key" value="{html.escape(values.get("runpod_api_key", RUNPOD_API_KEY))}" required>
           </div>
+          <label class="check"><input type="checkbox" name="remember_api_key"> Remember API key in this browser</label>
           <div class="field">
             <label>Prompt</label>
             <textarea name="prompt" required>{html.escape(values.get("prompt", "cinematic portrait, subtle head turn, natural motion, realistic lighting"))}</textarea>
@@ -266,6 +276,9 @@ def render_page(values=None, result=None, error=None):
             </div>
           </div>
           <label class="check"><input type="checkbox" name="refresh_worker" {"checked" if values.get("refresh_worker") else ""}> Refresh worker after completion</label>
+          <div class="persist-note">
+            Endpoint ID and generation settings are saved in this browser automatically. API key is only saved if you enable "Remember API key in this browser".
+          </div>
           <button type="submit">Submit Job</button>
         </form>
         {result_block}
@@ -287,6 +300,104 @@ def render_page(values=None, result=None, error=None):
       </div>
     </div>
   </div>
+  <script>
+    (() => {{
+      const storageKey = "wan22-runpod-ui-settings-v1";
+      const form = document.getElementById("job-form");
+      if (!form) return;
+
+      const persistentFields = [
+        "runpod_endpoint_id",
+        "prompt",
+        "negative_prompt",
+        "width",
+        "height",
+        "length",
+        "steps",
+        "cfg",
+        "seed",
+        "model_profile",
+        "gpu_profile",
+        "target_vram_gb",
+        "output_mode",
+        "lora_high",
+        "lora_low",
+        "lora_high_weight",
+        "lora_low_weight",
+        "refresh_worker",
+      ];
+      const sensitiveField = "runpod_api_key";
+      const rememberField = "remember_api_key";
+
+      function loadSettings() {{
+        try {{
+          return JSON.parse(localStorage.getItem(storageKey) || "{{}}");
+        }} catch (_error) {{
+          return {{}};
+        }}
+      }}
+
+      function saveSettings() {{
+        const saved = {{}};
+        for (const name of persistentFields) {{
+          const field = form.elements.namedItem(name);
+          if (!field) continue;
+          saved[name] = field.type === "checkbox" ? field.checked : field.value;
+        }}
+
+        const rememberApiKey = form.elements.namedItem(rememberField)?.checked;
+        saved[rememberField] = Boolean(rememberApiKey);
+        if (rememberApiKey) {{
+          saved[sensitiveField] = form.elements.namedItem(sensitiveField)?.value || "";
+        }}
+
+        localStorage.setItem(storageKey, JSON.stringify(saved));
+      }}
+
+      function restoreSettings() {{
+        const saved = loadSettings();
+        for (const name of persistentFields) {{
+          if (!(name in saved)) continue;
+          const field = form.elements.namedItem(name);
+          if (!field) continue;
+          if (field.type === "checkbox") {{
+            field.checked = Boolean(saved[name]);
+          }} else if (!field.value) {{
+            field.value = saved[name];
+          }}
+        }}
+
+        const rememberApiKey = Boolean(saved[rememberField]);
+        const rememberCheckbox = form.elements.namedItem(rememberField);
+        if (rememberCheckbox) {{
+          rememberCheckbox.checked = rememberApiKey;
+        }}
+
+        const apiKeyField = form.elements.namedItem(sensitiveField);
+        if (rememberApiKey && apiKeyField && saved[sensitiveField] && !apiKeyField.value) {{
+          apiKeyField.value = saved[sensitiveField];
+        }}
+      }}
+
+      restoreSettings();
+
+      form.addEventListener("input", saveSettings);
+      form.addEventListener("change", saveSettings);
+      form.addEventListener("submit", saveSettings);
+
+      const rememberCheckbox = form.elements.namedItem(rememberField);
+      if (rememberCheckbox) {{
+        rememberCheckbox.addEventListener("change", () => {{
+          if (!rememberCheckbox.checked) {{
+            const saved = loadSettings();
+            delete saved[sensitiveField];
+            saved[rememberField] = false;
+            localStorage.setItem(storageKey, JSON.stringify(saved));
+          }}
+        }});
+      }}
+    }})();
+  </script>
 </body>
 </html>"""
 
